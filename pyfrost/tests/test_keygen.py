@@ -98,6 +98,7 @@ class TestCaseKey(unittest.TestCase):
                 ),
                 "single_signature": single_sign,
                 "group_key": Utils.pub_to_code(key.dkg_key_pair["dkg_public_key"]),
+                "key_type": key.key_type,
             }
             self.assertTrue(
                 pyfrost.verify_single_signature(signature_data),

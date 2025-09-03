@@ -14,16 +14,19 @@ from pyfrost.crypto_utils import (
 
 
 def eth_challenge(
-    group_pub_key: Dict, message_hex: str, aggregated_nonce: str | Point
+    group_pub_key: Dict, message: str, aggregated_nonce: str | Point
 ) -> bytes:
     if isinstance(aggregated_nonce, Point):
         aggregated_nonce = pub_to_addr(aggregated_nonce)
+    
+    message_bytes = bytes.fromhex(message) if message.startswith('0x') else message.encode()
+
     packed_data = encode_packed(
         ["bytes32", "uint8", "bytes32", "address"],
         [
             bytes.fromhex(group_pub_key["x"].replace("0x", "")),
             group_pub_key["y_parity"],
-            bytes.fromhex(message_hex),
+            message_bytes,
             aggregated_nonce,
         ],
     )

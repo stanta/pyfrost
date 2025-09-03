@@ -1,8 +1,14 @@
 from flask import Blueprint, request, jsonify, abort
 from functools import wraps
-from pyfrost.frost import Key, KeyGen
-from pyfrost import create_nonces
-from typing import Dict
+from pyfrost.frost import (
+    Key,
+    KeyGen,
+    create_nonces,
+    aggregate_signatures,
+    verify_group_signature,
+    code_to_pub,
+)
+from typing import Dict, List
 from fastecdsa.encoding.sec1 import SEC1Encoder
 from fastecdsa import ecdsa, curve
 from fastecdsa.point import Point
@@ -10,6 +16,44 @@ from .abstract import NodesInfo, DataManager
 import json
 import logging
 import types
+import asyncio
+import aiohttp
+from hashlib import sha256
+from enum import Enum
+
+
+class SigningRequestStatus(Enum):
+    PENDING = "PENDING"
+    EXECUTED = "EXECUTED"
+    REJECTED = "REJECTED"
+
+
+def async_request_handler(func):
+    @wraps(func)
+    async def wrapper(self, *args, **kwargs):
+        route_path = request.url_rule.rule if request.url_rule else None
+        if not self.caller_validator(request.remote_addr, route_path):
+            abort(403)
+        try:
+            logging.debug(
+                f"{request.remote_addr}{route_path} Got message: {request.get_json()}"
+            )
+            result = await func(self, *args, **kwargs)
+            logging.debug(
+                f"{request.remote_addr}{route_path} Sent message: {json.dumps(result, indent=4)}"
+            )
+            return jsonify(result), 200
+        except Exception as e:
+            logging.error(
+                f"Flask async handler => Exception occurred: {type(e).__name__}: {e}",
+                exc_info=True,
+            )
+            return (
+                jsonify({"error": f"{type(e).__name__}: {e}", "status": "ERROR"}),
+                500,
+            )
+
+    return wrapper
 
 
 def request_handler(func):
@@ -57,6 +101,8 @@ class Node:
         self.private = private
         self.node_id = str(node_id)
         self.key_gens: Dict[str, KeyGen] = {}
+        self.created_wallets: List[str] = []
+        self.signing_requests: Dict[str, Dict] = {}
 
         # TODO: Check validator functions if it cannot get as input. and just use in decorator.
 
@@ -74,6 +120,242 @@ class Node:
         self.blueprint.route("/v1/generate-nonces", methods=["POST"])(
             self.generate_nonces
         )
+        # New orchestrator routes
+        self.blueprint.route("/v1/wallets", methods=["POST"])(self.create_wallet)
+        self.blueprint.route("/v1/wallets", methods=["GET"])(self.list_wallets)
+        self.blueprint.route("/v1/wallets/<dkg_public_key>", methods=["GET"])(
+            self.get_wallet_info
+        )
+        self.blueprint.route("/v1/signing-requests", methods=["POST"])(
+            self.create_signing_request
+        )
+        self.blueprint.route(
+            "/v1/signing-requests/<request_id>", methods=["GET"]
+        )(self.get_signing_request_details)
+        self.blueprint.route(
+            "/v1/signing-requests/<request_id>/execute", methods=["POST"]
+        )(self.execute_signing_request)
+        self.blueprint.route(
+            "/v1/signing-requests/<request_id>/reject", methods=["POST"]
+        )(self.reject_signing_request)
+
+    async def _make_request(self, session, node_id, endpoint, data):
+        """Helper to make async requests to other nodes."""
+        node_info = self.nodes_info.lookup_node(node_id)
+        url = f"http://{node_info['host']}:{node_info['port']}{endpoint}"
+        logging.debug(f"Making request to {url} with data: {data}")
+        async with session.post(url, json=data) as response:
+            response.raise_for_status()
+            res_json = await response.json()
+            logging.debug(f"Got response from {url}: {res_json}")
+            return res_json
+
+    @async_request_handler
+    async def create_wallet(self):
+        """Orchestrates the DKG process to create a new wallet."""
+        data = request.get_json()
+        party = data["party"]
+        threshold = data["threshold"]
+        key_type = data.get("key_type", "ETH")
+        dkg_id = data.get(
+            "dkg_id",
+            sha256(
+                json.dumps(party, sort_keys=True).encode()
+                + str(threshold).encode()
+            ).hexdigest(),
+        )
+
+        async with aiohttp.ClientSession() as session:
+            # Round 1
+            round1_payload = {
+                "party": party,
+                "dkg_id": dkg_id,
+                "threshold": threshold,
+                "key_type": key_type,
+            }
+            round1_tasks = [
+                self._make_request(session, node_id, "/v1/dkg/round1", round1_payload)
+                for node_id in party
+            ]
+            round1_results = await asyncio.gather(*round1_tasks)
+
+            broadcasted_data_r1 = {
+                res["broadcast"]["sender_id"]: res for res in round1_results
+            }
+
+            # Round 2
+            round2_payload = {"dkg_id": dkg_id, "broadcasted_data": broadcasted_data_r1}
+            round2_tasks = [
+                self._make_request(session, node_id, "/v1/dkg/round2", round2_payload)
+                for node_id in party
+            ]
+            round2_results = await asyncio.gather(*round2_tasks)
+
+            send_data_r3 = {node_id: [] for node_id in party}
+            for res in round2_results:
+                for item in res["broadcast"]:
+                    send_data_r3[item["receiver_id"]].append(item)
+
+            # Round 3
+            round3_tasks = []
+            for node_id in party:
+                payload = {"dkg_id": dkg_id, "send_data": send_data_r3[node_id]}
+                round3_tasks.append(
+                    self._make_request(session, node_id, "/v1/dkg/round3", payload)
+                )
+
+            round3_results = await asyncio.gather(*round3_tasks)
+
+        final_pub_key = round3_results[0]["data"]["dkg_public_key"]
+        if final_pub_key not in self.created_wallets:
+            self.created_wallets.append(final_pub_key)
+
+        return {"dkg_public_key": final_pub_key, "status": "SUCCESSFUL"}
+
+    @async_request_handler
+    async def list_wallets(self):
+        """Lists the public keys of all created wallets."""
+        wallets_with_details = []
+        for pub_key in self.created_wallets:
+            details = {"dkg_public_key": pub_key}
+            try:
+                key_data = self.data_manager.get_key(pub_key)
+                if key_data:
+                    details["has_local_share"] = True
+                    details["key_type"] = key_data.get("key_type")
+                else:
+                    details["has_local_share"] = False
+            except Exception:  # Assuming get_key might fail if key not found
+                details["has_local_share"] = False
+            wallets_with_details.append(details)
+
+        return {"wallets": wallets_with_details, "status": "SUCCESSFUL"}
+
+    @async_request_handler
+    async def get_wallet_info(self, dkg_public_key):
+        """Gets detailed information about a single wallet."""
+        if dkg_public_key not in self.created_wallets:
+            abort(404, "Wallet not found")
+
+        details = {"dkg_public_key": dkg_public_key}
+        try:
+            key_data = self.data_manager.get_key(dkg_public_key)
+            if key_data:
+                details["has_local_share"] = True
+                details["key_type"] = key_data.get("key_type")
+            else:
+                details["has_local_share"] = False
+        except Exception:
+            details["has_local_share"] = False
+
+        return {"wallet_info": details, "status": "SUCCESSFUL"}
+
+    @async_request_handler
+    async def create_signing_request(self):
+        """Creates a signing request and stores it for later execution."""
+        data = request.get_json()
+        dkg_public_key = data["dkg_public_key"]
+        message = data["message"]
+        party = data["party"]
+        request_id = data.get("request_id", sha256(message.encode()).hexdigest())
+
+        if request_id in self.signing_requests:
+            abort(409, f"Signing request with ID {request_id} already exists.")
+
+        self.signing_requests[request_id] = {
+            "dkg_public_key": dkg_public_key,
+            "message": message,
+            "party": party,
+            "status": SigningRequestStatus.PENDING.value,
+            "signature_data": None,
+        }
+
+        return {"request_id": request_id, "status": "PENDING"}
+
+    @async_request_handler
+    async def get_signing_request_details(self, request_id):
+        """Retrieves details for a specific signing request."""
+        signing_request = self.signing_requests.get(request_id)
+        if not signing_request:
+            abort(404, "Signing request not found")
+        return {"signing_request": signing_request}
+
+    @async_request_handler
+    async def execute_signing_request(self, request_id):
+        """Executes a pending signing request."""
+        signing_request = self.signing_requests.get(request_id)
+        if not signing_request:
+            abort(404, "Signing request not found")
+        if signing_request["status"] != SigningRequestStatus.PENDING.value:
+            abort(400, f"Signing request is not in PENDING state, but in {signing_request['status']}")
+
+        dkg_public_key = signing_request["dkg_public_key"]
+        message = signing_request["message"]
+        party = signing_request["party"]
+
+        async with aiohttp.ClientSession() as session:
+            # 1. Generate nonces
+            nonce_payload = {"number_of_nonces": 1}
+            nonce_tasks = [
+                self._make_request(
+                    session, node_id, "/v1/generate-nonces", nonce_payload
+                )
+                for node_id in party
+            ]
+            nonce_results = await asyncio.gather(*nonce_tasks)
+
+            nonces_dict = {
+                res["data"][0]["id"]: res["data"][0] for res in nonce_results
+            }
+
+            # 2. Get partial signatures
+            sign_payload = {
+                "dkg_public_key": dkg_public_key,
+                "nonces_dict": nonces_dict,
+                "data": {"hash": message},
+                "request_id": request_id,
+            }
+            sign_tasks = [
+                self._make_request(session, node_id, "/v1/sign", sign_payload)
+                for node_id in party
+            ]
+            partial_signatures = await asyncio.gather(*sign_tasks)
+
+            partial_signatures_data = [
+                sig["signature_data"] for sig in partial_signatures
+            ]
+
+        agg_pub_nonce_code = partial_signatures_data[0]["aggregated_public_nonce"]
+        agg_pub_nonce = code_to_pub(agg_pub_nonce_code)
+
+        aggregated_signature = aggregate_signatures(
+            message,
+            partial_signatures_data,
+            agg_pub_nonce,
+            int(dkg_public_key, 16),
+            partial_signatures_data[0]["key_type"],
+        )
+
+        is_valid = verify_group_signature(aggregated_signature)
+        if not is_valid:
+            raise Exception("Failed to verify aggregated signature.")
+
+        signing_request["status"] = SigningRequestStatus.EXECUTED.value
+        signing_request["signature_data"] = aggregated_signature
+
+        return {"request_id": request_id, "signature_data": aggregated_signature, "status": "EXECUTED"}
+
+    @async_request_handler
+    async def reject_signing_request(self, request_id):
+        """Rejects a pending signing request."""
+        signing_request = self.signing_requests.get(request_id)
+        if not signing_request:
+            abort(404, "Signing request not found")
+        if signing_request["status"] != SigningRequestStatus.PENDING.value:
+            abort(400, "Can only reject a PENDING signing request.")
+
+        signing_request["status"] = SigningRequestStatus.REJECTED.value
+        return {"request_id": request_id, "status": "REJECTED"}
 
     @request_handler
     def round1(self):

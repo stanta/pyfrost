@@ -241,6 +241,7 @@ class KeyGen:
         self.dkg_key_pair = {
             "share": share,
             "dkg_public_key": pub_to_code(dkg_public_key),
+            "key_type": self.key_type,
         }
 
         result = {

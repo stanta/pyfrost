@@ -191,6 +191,7 @@ class Test(unittest.TestCase):
                     "public_key_share": share_public_keys[single_signature["id"]],
                     "single_signature": single_signature,
                     "group_key": group_key,
+                    "key_type": single_signature["key_type"],
                 }
                 self.assertTrue(
                     frost.verify_single_signature(signature_data),
