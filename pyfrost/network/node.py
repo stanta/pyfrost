@@ -6,7 +6,10 @@ from pyfrost.frost import (
     create_nonces,
     aggregate_signatures,
     verify_group_signature,
+)
+from pyfrost.crypto_utils import (
     code_to_pub,
+    pub_to_addr,
 )
 from typing import Dict, List
 from fastecdsa.encoding.sec1 import SEC1Encoder
@@ -20,6 +23,10 @@ import asyncio
 import aiohttp
 from hashlib import sha256
 from enum import Enum
+from web3 import Web3
+from eth_utils import keccak
+from rlp import encode as rlp_encode
+from werkzeug.exceptions import HTTPException
 
 
 class SigningRequestStatus(Enum):
@@ -35,14 +42,19 @@ def async_request_handler(func):
         if not self.caller_validator(request.remote_addr, route_path):
             abort(403)
         try:
+            if request.method in ['POST', 'PUT'] and not request.is_json:
+                logging.warning(f"Request from {request.remote_addr} to {route_path} has incorrect Content-Type: {request.content_type}")
             logging.debug(
-                f"{request.remote_addr}{route_path} Got message: {request.get_json()}"
+                f"{request.remote_addr}{route_path} Got message: {request.get_json(silent=True)}"
             )
             result = await func(self, *args, **kwargs)
             logging.debug(
                 f"{request.remote_addr}{route_path} Sent message: {json.dumps(result, indent=4)}"
             )
             return jsonify(result), 200
+        except HTTPException as e:
+            # Re-raise HTTP exceptions (like aborts) so Flask can handle them
+            raise e
         except Exception as e:
             logging.error(
                 f"Flask async handler => Exception occurred: {type(e).__name__}: {e}",
@@ -63,8 +75,10 @@ def request_handler(func):
         if not self.caller_validator(request.remote_addr, route_path):
             abort(403)
         try:
+            if request.method in ['POST', 'PUT'] and not request.is_json:
+                logging.warning(f"Request from {request.remote_addr} to {route_path} has incorrect Content-Type: {request.content_type}")
             logging.debug(
-                f"{request.remote_addr}{route_path} Got message: {request.get_json()}"
+                f"{request.remote_addr}{route_path} Got message: {request.get_json(silent=True)}"
             )
             result: Dict = func(self, *args, **kwargs)
             to_sign = json.dumps(result, sort_keys=True).encode("utf-8")
@@ -96,6 +110,7 @@ class Node:
         nodes_info: NodesInfo,
         caller_validator: types.FunctionType,
         data_validator: types.FunctionType,
+        eth_rpc_url: str = None,
     ) -> None:
         self.blueprint = Blueprint("pyfrost", __name__)
         self.private = private
@@ -111,6 +126,13 @@ class Node:
         self.caller_validator = caller_validator
         self.data_validator = data_validator
         self.data_manager: DataManager = data_manager
+        self.w3 = None
+        if eth_rpc_url:
+            self.w3 = Web3(Web3.HTTPProvider(eth_rpc_url))
+            if not self.w3.is_connected():
+                raise ConnectionError(
+                    f"Failed to connect to Ethereum RPC at {eth_rpc_url}"
+                )
 
         # Adding routes:
         self.blueprint.route("/v1/dkg/round1", methods=["POST"])(self.round1)
@@ -138,6 +160,9 @@ class Node:
         self.blueprint.route(
             "/v1/signing-requests/<request_id>/reject", methods=["POST"]
         )(self.reject_signing_request)
+        self.blueprint.route(
+            "/v1/wallets/<dkg_public_key>/transactions", methods=["POST"]
+        )(self.send_eth_transaction)
 
     async def _make_request(self, session, node_id, endpoint, data):
         """Helper to make async requests to other nodes."""
@@ -149,6 +174,60 @@ class Node:
             res_json = await response.json()
             logging.debug(f"Got response from {url}: {res_json}")
             return res_json
+
+    async def _orchestrate_signature_creation(
+        self, dkg_public_key: str, message: str, party: List[str]
+    ) -> Dict:
+        """Internal method to orchestrate signature generation."""
+        request_id = sha256(message.encode()).hexdigest()
+        async with aiohttp.ClientSession() as session:
+            # 1. Generate nonces
+            nonce_payload = {"number_of_nonces": 1}
+            nonce_tasks = [
+                self._make_request(
+                    session, node_id, "/v1/generate-nonces", nonce_payload
+                )
+                for node_id in party
+            ]
+            nonce_results = await asyncio.gather(*nonce_tasks)
+
+            nonces_dict = {
+                res["data"][0]["id"]: res["data"][0] for res in nonce_results
+            }
+
+            # 2. Get partial signatures
+            sign_payload = {
+                "dkg_public_key": dkg_public_key,
+                "nonces_dict": nonces_dict,
+                "data": {"hash": message},
+                "request_id": request_id,
+            }
+            sign_tasks = [
+                self._make_request(session, node_id, "/v1/sign", sign_payload)
+                for node_id in party
+            ]
+            partial_signatures = await asyncio.gather(*sign_tasks)
+
+            partial_signatures_data = [
+                sig["signature_data"] for sig in partial_signatures
+            ]
+
+        agg_pub_nonce_code = partial_signatures_data[0]["aggregated_public_nonce"]
+        agg_pub_nonce = code_to_pub(agg_pub_nonce_code)
+
+        aggregated_signature = aggregate_signatures(
+            message,
+            partial_signatures_data,
+            agg_pub_nonce,
+            int(dkg_public_key, 16),
+            partial_signatures_data[0]["key_type"],
+        )
+
+        is_valid = verify_group_signature(aggregated_signature)
+        if not is_valid:
+            raise Exception("Failed to verify aggregated signature.")
+
+        return aggregated_signature
 
     @async_request_handler
     async def create_wallet(self):
@@ -287,63 +366,25 @@ class Node:
         if not signing_request:
             abort(404, "Signing request not found")
         if signing_request["status"] != SigningRequestStatus.PENDING.value:
-            abort(400, f"Signing request is not in PENDING state, but in {signing_request['status']}")
+            abort(
+                400,
+                f"Signing request is not in PENDING state, but in {signing_request['status']}",
+            )
 
-        dkg_public_key = signing_request["dkg_public_key"]
-        message = signing_request["message"]
-        party = signing_request["party"]
-
-        async with aiohttp.ClientSession() as session:
-            # 1. Generate nonces
-            nonce_payload = {"number_of_nonces": 1}
-            nonce_tasks = [
-                self._make_request(
-                    session, node_id, "/v1/generate-nonces", nonce_payload
-                )
-                for node_id in party
-            ]
-            nonce_results = await asyncio.gather(*nonce_tasks)
-
-            nonces_dict = {
-                res["data"][0]["id"]: res["data"][0] for res in nonce_results
-            }
-
-            # 2. Get partial signatures
-            sign_payload = {
-                "dkg_public_key": dkg_public_key,
-                "nonces_dict": nonces_dict,
-                "data": {"hash": message},
-                "request_id": request_id,
-            }
-            sign_tasks = [
-                self._make_request(session, node_id, "/v1/sign", sign_payload)
-                for node_id in party
-            ]
-            partial_signatures = await asyncio.gather(*sign_tasks)
-
-            partial_signatures_data = [
-                sig["signature_data"] for sig in partial_signatures
-            ]
-
-        agg_pub_nonce_code = partial_signatures_data[0]["aggregated_public_nonce"]
-        agg_pub_nonce = code_to_pub(agg_pub_nonce_code)
-
-        aggregated_signature = aggregate_signatures(
-            message,
-            partial_signatures_data,
-            agg_pub_nonce,
-            int(dkg_public_key, 16),
-            partial_signatures_data[0]["key_type"],
+        signature = await self._orchestrate_signature_creation(
+            signing_request["dkg_public_key"],
+            signing_request["message"],
+            signing_request["party"],
         )
 
-        is_valid = verify_group_signature(aggregated_signature)
-        if not is_valid:
-            raise Exception("Failed to verify aggregated signature.")
-
         signing_request["status"] = SigningRequestStatus.EXECUTED.value
-        signing_request["signature_data"] = aggregated_signature
+        signing_request["signature_data"] = signature
 
-        return {"request_id": request_id, "signature_data": aggregated_signature, "status": "EXECUTED"}
+        return {
+            "request_id": request_id,
+            "signature_data": signature,
+            "status": "EXECUTED",
+        }
 
     @async_request_handler
     async def reject_signing_request(self, request_id):
@@ -356,6 +397,55 @@ class Node:
 
         signing_request["status"] = SigningRequestStatus.REJECTED.value
         return {"request_id": request_id, "status": "REJECTED"}
+
+    @async_request_handler
+    async def send_eth_transaction(self, dkg_public_key):
+        """
+        Creates, signs, and sends an Ethereum transaction using the specified MPC wallet.
+        """
+        if not self.w3:
+            abort(500, "Ethereum RPC URL not configured for this node.")
+
+        data = request.get_json()
+        to_address = data["to"]
+        value_in_eth = data["value_in_eth"]
+        party = data["party"]
+
+        # 1. Prepare transaction data
+        from_address_point = code_to_pub(int(dkg_public_key, 16))
+        from_address = pub_to_addr(from_address_point)
+
+        tx_data = {
+            "to": self.w3.to_checksum_address(to_address),
+            "value": self.w3.to_wei(value_in_eth, "ether"),
+            "gas": 21000,
+            "gasPrice": self.w3.eth.gas_price,
+            "nonce": self.w3.eth.get_transaction_count(from_address),
+            "chainId": self.w3.eth.chain_id,
+        }
+
+        # 2. Hash the transaction for signing
+        # Note: web3.py's Transaction object handles the RLP encoding internally
+        tx_object = self.w3.eth.account._prepare_transaction(tx_data)
+        tx_hash_to_sign = tx_object.hash.hex()
+
+        # 3. Orchestrate MPC signature
+        mpc_signature = await self._orchestrate_signature_creation(
+            dkg_public_key, tx_hash_to_sign, party
+        )
+
+        # 4. Assemble the final signed transaction
+        public_nonce_point = code_to_pub(int(mpc_signature['public_nonce'], 16))
+        v = 27 + (public_nonce_point.y % 2)
+        r = public_nonce_point.x
+        s = mpc_signature['signature']
+        
+        encoded_tx = self.w3.eth.account._create_transaction_with_signature(tx_object, (v, r, s))
+
+        # 5. Send the transaction to the blockchain
+        sent_tx_hash = self.w3.eth.send_raw_transaction(encoded_tx.rawTransaction)
+
+        return {"status": "SUCCESSFUL", "tx_hash": "0x" + sent_tx_hash.hex()}
 
     @request_handler
     def round1(self):
