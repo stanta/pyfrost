@@ -1,0 +1,40 @@
+version: "3.8"
+services:
+  node1:
+    build: .
+    image: pyfrost-common
+    command: python pyfrost/network/examples/node.py 1
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./logs:/usr/src/app/logs
+
+  node2:
+    image: pyfrost-common
+    command: python pyfrost/network/examples/node.py 2
+    ports:
+      - "5002:5002"
+    volumes:
+      - ./logs:/usr/src/app/logs
+    depends_on:
+      - node1
+
+  node3:
+    image: pyfrost-common
+    command: python pyfrost/network/examples/node.py 3
+    ports:
+      - "5003:5003"
+    volumes:
+      - ./logs:/usr/src/app/logs
+    depends_on:
+      - node1
+
+  example:
+    image: pyfrost-common
+    command: python pyfrost/network/examples/example.py 3 2 3 1
+    depends_on:
+      - node1
+      - node2
+      - node3
+    volumes:
+      - ./logs:/usr/src/app/logs

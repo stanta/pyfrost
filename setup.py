@@ -12,5 +12,6 @@ setup(
         "bitcoin-utils==0.6.8",
         "eth_abi==5.1.0",
         "web3",
+        "flasgger"
     ],
 )
