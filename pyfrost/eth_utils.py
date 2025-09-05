@@ -19,7 +19,16 @@ def eth_challenge(
     if isinstance(aggregated_nonce, Point):
         aggregated_nonce = pub_to_addr(aggregated_nonce)
     
-    message_bytes = bytes.fromhex(message) if message.startswith('0x') else message.encode()
+    # Handle different message formats
+    if message.startswith('0x'):
+        # Remove 0x prefix and decode hex
+        message_bytes = bytes.fromhex(message[2:])
+    elif len(message) == 64 and all(c in '0123456789abcdefABCDEF' for c in message):
+        # 64-character hex string (32 bytes) - decode as hex
+        message_bytes = bytes.fromhex(message)
+    else:
+        # Regular string message
+        message_bytes = message.encode()
 
     packed_data = encode_packed(
         ["bytes32", "uint8", "bytes32", "address"],
