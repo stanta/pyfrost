@@ -1,11 +1,10 @@
 # PyFrost
 
-PyFrost is a Python implementation of the [FROST](https://eprint.iacr.org/2020/852.pdf) protocol. FROST stands for Flexible Round-Optimized Schnorr Threshold Signatures, a protocol that surpasses other threshold signature protocols with its efficient single-round signing procedure. PyFrost utilizes the standard FROST protocol for single-round signing operations. Additionally, it incorporates the [Identifiable Cheating Entity FROST Signature Protocol](https://eprint.iacr.org/2021/1658.pdf) within the *distributed key generation (DKG)* framework. This approach is designed to detect and mitigate potential malicious behavior, such as when cheating entities selectively share secrets during the DKG process to exclude honest participants.
+PyFrost is a Python implementation of the [FROST](https://eprint.iacr.org/2020/852.pdf) protocol. FROST stands for Flexible Round-Optimized Schnorr Threshold Signatures, a protocol that surpasses other threshold signature protocols with its efficient single-round signing procedure. PyFrost utilizes the standard FROST protocol for single-round signing operations. Additionally, it incorporates the [Identifiable Cheating Entity FROST Signature Protocol](https://eprint.iacr.org/2021/1658.pdf) within the _distributed key generation (DKG)_ framework. This approach is designed to detect and mitigate potential malicious behavior, such as when cheating entities selectively share secrets during the DKG process to exclude honest participants.
 
 [This tutorial](https://github.com/SAYaghoubnejad/pyfrost/wiki/PyFrost-TSS-Protocol) provides an introduction to cryptographic concepts integral to PyFrost, including Threshold Signatures, Distributed Key Generation, Cheating Identification, Standard Schnorr Signatures, and Single-Round Schnorr Threshold Signatures.
 
 PyFrost implements the cryptographic functions of the FROST protocol and includes a networking package that features libp2p clients for nodes, signature aggregators, and distributed key generators.
-
 
 ## Cryptography Classes & Functions
 
@@ -14,15 +13,19 @@ PyFrost implements the cryptographic functions of the FROST protocol and include
 The network package includes the implementation of the following components:
 
 #### Node
+
 A HTTP server that facilitates the three rounds of the Distributed Key Generation (DKG) process, as well as nonce creation and signing methods.
 
 #### Distributed Key Generator
+
 A Libp2p client responsible for initiating the DKG process through the node.
 
 #### Signature Aggregator
+
 A HTTP client that collects nonces, requests signatures from nodes, and then aggregates and verifies them.
 
 To effectively utilize PyFrost in your Threshold Signature Scheme (TSS) network, the following interface classes, used by the above clients, should be implemented:
+
 - **Data Manager**: Functions for storing and retrieving private nonces and keys.
 - **Node Info**: Provides a list of network nodes along with their information.
 - **Validators**: Verifies the roles of signature aggregators and distributed key generators.
@@ -46,7 +49,7 @@ $ source venv/bin/activate
 To run tests, navigate to the root directory and run the fallowing command:
 
 ```bash
-(venv) $ python run_tests.py 
+(venv) $ python run_tests.py
 ```
 
 ## How to Run an Example
@@ -81,6 +84,121 @@ The script requires 4 parameters:
 4. `number of signatures`: The count of signatures requested by the signature aggregator after the DKG.
 
 **Note:** Logs for each node and the signature aggregator are stored in the `./logs` directory.
+
+## API Documentation
+
+The PyFrost node exposes a RESTful API for wallet management, signing requests, and the Distributed Key Generation (DKG) process. The API is documented using OpenAPI (Swagger), and the interactive UI can be accessed at the `/apidocs` endpoint of a running node.
+
+### Wallets
+
+#### Create Wallet
+
+- **POST** `/v1/wallets`
+  Orchestrates the DKG process to create a new wallet.
+  **Request Body:**
+  - `party` (array[string]): List of node IDs participating in DKG.
+  - `threshold` (integer): Minimum number of nodes required to sign.
+  - `key_type` (string): Type of key to generate (e.g., ETH).
+  - `dkg_id` (string, optional): DKG session ID.
+    **Response (200):**
+  - `dkg_public_key` (string): Public key of the created wallet.
+  - `status` (string): `SUCCESSFUL`
+
+#### List Wallets
+
+- **GET** `/v1/wallets`
+  Lists the public keys of all created wallets.
+  **Response (200):**
+  - `wallets` (array[object]): List of wallets.
+    - `dkg_public_key` (string): Public key of the wallet.
+    - `has_local_share` (boolean): Whether the node has a local share of the wallet.
+    - `key_type` (string): Type of key.
+  - `status` (string): `SUCCESSFUL`
+
+#### Get Wallet Info
+
+- **GET** `/v1/wallets/<dkg_public_key>`
+  Gets detailed information about a single wallet.
+  **Path Parameters:**
+  - `dkg_public_key` (string): Public key of the wallet.
+    **Response (200):**
+  - `wallet_info` (object): Wallet details.
+  - `status` (string): `SUCCESSFUL`
+
+### Signing Requests
+
+#### Create Signing Request
+
+- **POST** `/v1/signing-requests`
+  Creates a signing request and stores it for later execution.
+  **Request Body:**
+  - `dkg_public_key` (string): Public key of the wallet to use for signing.
+  - `message` (string): Message to sign.
+  - `party` (array[string]): List of node IDs participating in signing.
+  - `request_id` (string, optional): Request ID.
+    **Response (200):**
+  - `request_id` (string): ID of the created request.
+  - `status` (string): `PENDING`
+
+#### Get Signing Request Details
+
+- **GET** `/v1/signing-requests/<request_id>`
+  Retrieves details for a specific signing request.
+  **Path Parameters:**
+  - `request_id` (string): ID of the signing request.
+    **Response (200):**
+  - `signing_request` (object): Details of the signing request.
+
+#### Execute Signing Request
+
+- **POST** `/v1/signing-requests/<request_id>/execute`
+  Executes a pending signing request.
+  **Path Parameters:**
+  - `request_id` (string): ID of the signing request.
+    **Response (200):**
+  - `request_id` (string): ID of the executed request.
+  - `signature_data` (object): The resulting signature data.
+  - `status` (string): `EXECUTED`
+
+#### Reject Signing Request
+
+- **POST** `/v1/signing-requests/<request_id>/reject`
+  Rejects a pending signing request.
+  **Path Parameters:**
+  - `request_id` (string): ID of the signing request.
+    **Response (200):**
+  - `request_id` (string): ID of the rejected request.
+  - `status` (string): `REJECTED`
+
+### DKG Process
+
+- **POST** `/v1/dkg/round1`
+- **POST** `/v1/dkg/round2`
+- **POST** `/v1/dkg/round3`
+
+These endpoints are used internally during the DKG process.
+
+### Signing
+
+- **POST** `/v1/sign`
+  Used internally by the orchestrator to request a partial signature from a node.
+
+- **POST** `/v1/generate-nonces`
+  Used internally by the orchestrator to request nonces from a node.
+
+### Ethereum Transactions
+
+- **POST** `/v1/wallets/<dkg_public_key>/transactions`
+  Creates, signs, and sends an Ethereum transaction using the specified MPC wallet.
+  **Path Parameters:**
+  - `dkg_public_key` (string): Public key of the wallet.
+    **Request Body:**
+  - `to` (string): Recipient Ethereum address.
+  - `value_in_eth` (number): Amount of ETH to send.
+  - `party` (array[string]): List of node IDs participating in signing.
+    **Response (200):**
+  - `status` (string): `SUCCESSFUL`
+  - `tx_hash` (string): The hash of the sent transaction.
 
 ## Benchmarking
 

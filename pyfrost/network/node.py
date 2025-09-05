@@ -1,4 +1,5 @@
 from flask import Blueprint, request, jsonify, abort
+from flasgger import Swagger, swag_from
 from functools import wraps
 from pyfrost.frost import (
     Key,
@@ -112,7 +113,14 @@ class Node:
         data_validator: types.FunctionType,
         eth_rpc_url: str = None,
     ) -> None:
-        self.blueprint = Blueprint("pyfrost", __name__)
+    self.blueprint = Blueprint("pyfrost", __name__)
+    self.swagger = None  # Will be initialized in Flask app context
+        # Swagger UI setup (to be called in Flask app context)
+        def register_swagger(app):
+            if not hasattr(app, 'swagger'):
+                app.swagger = Swagger(app)
+            self.swagger = app.swagger
+        self.register_swagger = register_swagger
         self.private = private
         self.node_id = str(node_id)
         self.key_gens: Dict[str, KeyGen] = {}
@@ -231,7 +239,48 @@ class Node:
 
     @async_request_handler
     async def create_wallet(self):
-        """Orchestrates the DKG process to create a new wallet."""
+                """
+                Orchestrates the DKG process to create a new wallet.
+                ---
+                tags:
+                    - Wallets
+                requestBody:
+                    required: true
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    party:
+                                        type: array
+                                        items:
+                                            type: string
+                                        description: List of node IDs participating in DKG.
+                                    threshold:
+                                        type: integer
+                                        description: Minimum number of nodes required to sign.
+                                    key_type:
+                                        type: string
+                                        description: Type of key to generate (e.g., ETH).
+                                    dkg_id:
+                                        type: string
+                                        description: Optional DKG session ID.
+                responses:
+                    200:
+                        description: Wallet created successfully
+                        content:
+                            application/json:
+                                schema:
+                                    type: object
+                                    properties:
+                                        dkg_public_key:
+                                            type: string
+                                            description: Public key of the created wallet.
+                                        status:
+                                            type: string
+                                            example: SUCCESSFUL
+                """
+                # ...existing code...
         data = request.get_json()
         party = data["party"]
         threshold = data["threshold"]
@@ -293,7 +342,38 @@ class Node:
 
     @async_request_handler
     async def list_wallets(self):
-        """Lists the public keys of all created wallets."""
+                """
+                Lists the public keys of all created wallets.
+                ---
+                tags:
+                    - Wallets
+                responses:
+                    200:
+                        description: List of wallets
+                        content:
+                            application/json:
+                                schema:
+                                    type: object
+                                    properties:
+                                        wallets:
+                                            type: array
+                                            items:
+                                                type: object
+                                                properties:
+                                                    dkg_public_key:
+                                                        type: string
+                                                        description: Public key of the wallet.
+                                                    has_local_share:
+                                                        type: boolean
+                                                        description: Whether the node has a local share of the wallet.
+                                                    key_type:
+                                                        type: string
+                                                        description: Type of key (if available).
+                                        status:
+                                            type: string
+                                            example: SUCCESSFUL
+                """
+                # ...existing code...
         wallets_with_details = []
         for pub_key in self.created_wallets:
             details = {"dkg_public_key": pub_key}
@@ -312,7 +392,40 @@ class Node:
 
     @async_request_handler
     async def get_wallet_info(self, dkg_public_key):
-        """Gets detailed information about a single wallet."""
+                """
+                Gets detailed information about a single wallet.
+                ---
+                tags:
+                    - Wallets
+                parameters:
+                    - name: dkg_public_key
+                        in: path
+                        required: true
+                        schema:
+                            type: string
+                        description: Public key of the wallet.
+                responses:
+                    200:
+                        description: Wallet details
+                        content:
+                            application/json:
+                                schema:
+                                    type: object
+                                    properties:
+                                        wallet_info:
+                                            type: object
+                                            properties:
+                                                dkg_public_key:
+                                                    type: string
+                                                has_local_share:
+                                                    type: boolean
+                                                key_type:
+                                                    type: string
+                                        status:
+                                            type: string
+                                            example: SUCCESSFUL
+                """
+                # ...existing code...
         if dkg_public_key not in self.created_wallets:
             abort(404, "Wallet not found")
 
@@ -331,7 +444,47 @@ class Node:
 
     @async_request_handler
     async def create_signing_request(self):
-        """Creates a signing request and stores it for later execution."""
+                """
+                Creates a signing request and stores it for later execution.
+                ---
+                tags:
+                    - Signing Requests
+                requestBody:
+                    required: true
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    dkg_public_key:
+                                        type: string
+                                        description: Public key of the wallet to use for signing.
+                                    message:
+                                        type: string
+                                        description: Message to sign.
+                                    party:
+                                        type: array
+                                        items:
+                                            type: string
+                                        description: List of node IDs participating in signing.
+                                    request_id:
+                                        type: string
+                                        description: Optional request ID.
+                responses:
+                    200:
+                        description: Signing request created
+                        content:
+                            application/json:
+                                schema:
+                                    type: object
+                                    properties:
+                                        request_id:
+                                            type: string
+                                        status:
+                                            type: string
+                                            example: PENDING
+                """
+                # ...existing code...
         data = request.get_json()
         dkg_public_key = data["dkg_public_key"]
         message = data["message"]
@@ -353,7 +506,32 @@ class Node:
 
     @async_request_handler
     async def get_signing_request_details(self, request_id):
-        """Retrieves details for a specific signing request."""
+                """
+                Retrieves details for a specific signing request.
+                ---
+                tags:
+                    - Signing Requests
+                parameters:
+                    - name: request_id
+                        in: path
+                        required: true
+                        schema:
+                            type: string
+                        description: ID of the signing request.
+                responses:
+                    200:
+                        description: Signing request details
+                        content:
+                            application/json:
+                                schema:
+                                    type: object
+                                    properties:
+                                        signing_request:
+                                            type: object
+                                        status:
+                                            type: string
+                """
+                # ...existing code...
         signing_request = self.signing_requests.get(request_id)
         if not signing_request:
             abort(404, "Signing request not found")
@@ -361,7 +539,35 @@ class Node:
 
     @async_request_handler
     async def execute_signing_request(self, request_id):
-        """Executes a pending signing request."""
+                """
+                Executes a pending signing request.
+                ---
+                tags:
+                    - Signing Requests
+                parameters:
+                    - name: request_id
+                        in: path
+                        required: true
+                        schema:
+                            type: string
+                        description: ID of the signing request.
+                responses:
+                    200:
+                        description: Signing request executed
+                        content:
+                            application/json:
+                                schema:
+                                    type: object
+                                    properties:
+                                        request_id:
+                                            type: string
+                                        signature_data:
+                                            type: object
+                                        status:
+                                            type: string
+                                            example: EXECUTED
+                """
+                # ...existing code...
         signing_request = self.signing_requests.get(request_id)
         if not signing_request:
             abort(404, "Signing request not found")
@@ -388,7 +594,33 @@ class Node:
 
     @async_request_handler
     async def reject_signing_request(self, request_id):
-        """Rejects a pending signing request."""
+                """
+                Rejects a pending signing request.
+                ---
+                tags:
+                    - Signing Requests
+                parameters:
+                    - name: request_id
+                        in: path
+                        required: true
+                        schema:
+                            type: string
+                        description: ID of the signing request.
+                responses:
+                    200:
+                        description: Signing request rejected
+                        content:
+                            application/json:
+                                schema:
+                                    type: object
+                                    properties:
+                                        request_id:
+                                            type: string
+                                        status:
+                                            type: string
+                                            example: REJECTED
+                """
+                # ...existing code...
         signing_request = self.signing_requests.get(request_id)
         if not signing_request:
             abort(404, "Signing request not found")
