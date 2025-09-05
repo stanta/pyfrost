@@ -1,4 +1,5 @@
 from flask import Blueprint, request, jsonify, abort, current_app
+import asyncio
 from .decorators import async_request_handler
 from pyfrost.network.models import SigningRequestStatus
 from hashlib import sha256

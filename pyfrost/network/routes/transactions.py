@@ -1,6 +1,8 @@
 from flask import Blueprint, request, jsonify, abort, current_app
 from .decorators import async_request_handler
 from pyfrost.crypto_utils import code_to_pub, pub_to_addr
+from fastecdsa.encoding.sec1 import SEC1Encoder
+from fastecdsa.curve import secp256k1 as ecurve
 
 transactions_bp = Blueprint('transactions', __name__)
 
@@ -46,7 +48,14 @@ async def send_eth_transaction(dkg_public_key):
     )
 
     # 4. Assemble the final signed transaction
-    public_nonce_point = code_to_pub(int(mpc_signature['public_nonce'], 16))
+    # public_nonce may be an integer hex string or already a compressed SEC1 hex string
+    try:
+        if len(mpc_signature['public_nonce']) in (66, 130):  # compressed or uncompressed hex length
+            public_nonce_point = SEC1Encoder.decode_public_key(bytes.fromhex(mpc_signature['public_nonce']), ecurve)
+        else:
+            public_nonce_point = code_to_pub(int(mpc_signature['public_nonce'], 16))
+    except Exception:
+        abort(500, "Invalid public nonce supplied")
     v = 27 + (public_nonce_point.y % 2)
     r = public_nonce_point.x
     s = mpc_signature['signature']
