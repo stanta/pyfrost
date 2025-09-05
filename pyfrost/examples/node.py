@@ -21,12 +21,7 @@ def run_node(node_number: int) -> None:
     )
     node_info = nodes_info.lookup_node(str(node_number))
     app = Flask(__name__)
-    
-    # Initialize Swagger
-    from flasgger import Swagger
-    swagger = Swagger(app)
-    
-    app.register_blueprint(node.blueprint, url_prefix="/pyfrost")
+    node.register_blueprints(app)
     
     # Use environment variables for Docker compatibility
     host = os.getenv("FLASK_HOST", node_info["host"])
