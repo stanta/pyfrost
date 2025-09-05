@@ -1,40 +1,81 @@
-version: "3.8"
 services:
   node1:
     build: .
-    image: pyfrost-common
-    command: python pyfrost/network/examples/node.py 1
     ports:
-      - "5001:5001"
+      - "5001:5000"
     volumes:
       - ./logs:/usr/src/app/logs
+    command: python pyfrost/examples/node.py 1
+    environment:
+      - FLASK_ENV=development
+      - FLASK_HOST=0.0.0.0
+      - FLASK_PORT=5000
+    networks:
+      - pyfrost-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/pyfrost/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   node2:
-    image: pyfrost-common
-    command: python pyfrost/network/examples/node.py 2
+    build: .
     ports:
-      - "5002:5002"
+      - "5002:5000"
     volumes:
       - ./logs:/usr/src/app/logs
-    depends_on:
-      - node1
+    command: python pyfrost/examples/node.py 2
+    environment:
+      - FLASK_ENV=development
+      - FLASK_HOST=0.0.0.0
+      - FLASK_PORT=5000
+    networks:
+      - pyfrost-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/pyfrost/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   node3:
-    image: pyfrost-common
-    command: python pyfrost/network/examples/node.py 3
+    build: .
     ports:
-      - "5003:5003"
+      - "5003:5000"
     volumes:
       - ./logs:/usr/src/app/logs
-    depends_on:
-      - node1
+    command: python pyfrost/examples/node.py 3
+    environment:
+      - FLASK_ENV=development
+      - FLASK_HOST=0.0.0.0
+      - FLASK_PORT=5000
+    networks:
+      - pyfrost-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/pyfrost/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   example:
-    image: pyfrost-common
-    command: python pyfrost/network/examples/example.py 3 2 3 1
-    depends_on:
-      - node1
-      - node2
-      - node3
+    build: .
     volumes:
       - ./logs:/usr/src/app/logs
+    command: bash -c "sleep 45 && python pyfrost/examples/example.py 3 2 3 1"
+    depends_on:
+      node1:
+        condition: service_healthy
+      node2:
+        condition: service_healthy
+      node3:
+        condition: service_healthy
+    environment:
+      - PYFROST_HOST=docker
+    networks:
+      - pyfrost-network
+
+networks:
+  pyfrost-network:
+    driver: bridge

@@ -8,7 +8,7 @@ WORKDIR /usr/src/app
 COPY . .
 
 # Install any needed packages specified in setup.py
-RUN apt-get update && apt-get install -y build-essential libgmp-dev
+RUN apt-get update && apt-get install -y build-essential libgmp-dev curl
 RUN pip install .
 
 # The command to run the app will be specified in docker-compose.yml
