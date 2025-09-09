@@ -39,6 +39,12 @@ from .eth_utils import (
     eth_verify_single_sign,
     eth_verify_group_sign,
 )
+from .tron_utils import (
+    tron_challenge,
+    tron_generate_signature_share,
+    tron_verify_single_sign,
+    tron_verify_group_sign,
+)
 
 
 class KeyGen:
@@ -345,6 +351,12 @@ def single_sign(
             nonce_e,
             my_row,
         )
+    elif key_type == "TRON":
+        challenge = tron_challenge(group_key_pub, message, aggregated_public_nonce)
+        coef = lagrange_coef(index, len(nonces_list), nonces_list, 0)
+        signature_share = tron_generate_signature_share(
+            share, coef, challenge, nonce_d, nonce_e, my_row
+        )
     return {
         "id": id,
         "signature": signature_share,
@@ -429,6 +441,15 @@ def verify_single_signature(signature_data: Dict) -> bool:
         coef = lagrange_coef(index, len(nonces_dict), nonces_dict, 0) % ecurve.q
         return btc_verify_single_sign(coef, challenge, public_nonce, signature_data)
 
+    elif signature_data["key_type"] == "TRON":
+        challenge = tron_challenge(
+            group_key_pub,
+            signature_data["message"],
+            signature_data["aggregated_public_nonce"],
+        )
+        coef = lagrange_coef(index, len(nonces_dict), nonces_dict, 0)
+        return tron_verify_single_sign(coef, challenge, public_nonce, signature_data)
+
 
 def aggregate_nonce(message: str, nonces_dict: Dict[str, Dict[str, int]]) -> Point:
     # Convert nonces to a list and get bytes of the message
@@ -491,6 +512,9 @@ def verify_group_signature(aggregated_signature: Dict) -> bool:
 
     elif aggregated_signature["key_type"] == "BTC":
         return btc_verify_group_signature(aggregated_signature)
+
+    elif aggregated_signature["key_type"] == "TRON":
+        return tron_verify_group_sign(group_pub_key, message, aggregated_signature)
 
 
 # TODO : exclude complaint

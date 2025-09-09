@@ -16,6 +16,8 @@ def sign():
     nonces_dict = data["nonces_dict"]
     sa_data = data["data"]
     request_id = data["request_id"]
+    chain = data.get("chain", "ETH")
+    sa_data['chain'] = chain
     result = node.data_validator(sa_data)
     key_pair = node.data_manager.get_key(str(dkg_public_key))
     # TODO: Must remove

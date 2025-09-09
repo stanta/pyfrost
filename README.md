@@ -186,15 +186,17 @@ These endpoints are used internally during the DKG process.
 - **POST** `/v1/generate-nonces`
   Used internally by the orchestrator to request nonces from a node.
 
-### Ethereum Transactions
+### Transactions
 
 - **POST** `/v1/wallets/<dkg_public_key>/transactions`
-  Creates, signs, and sends an Ethereum transaction using the specified MPC wallet.
+  Creates, signs, and sends a transaction using the specified MPC wallet.
   **Path Parameters:**
   - `dkg_public_key` (string): Public key of the wallet.
     **Request Body:**
-  - `to` (string): Recipient Ethereum address.
-  - `value_in_eth` (number): Amount of ETH to send.
+  - `chain` (string): The blockchain to use (e.g., "ETH", "TRON"). Defaults to "ETH".
+  - `to` (string): Recipient address.
+  - `value_in_eth` (number): Amount of ETH to send (for Ethereum).
+  - `value_in_sun` (number): Amount of SUN to send (for TRON).
   - `party` (array[string]): List of node IDs participating in signing.
     **Response (200):**
   - `status` (string): `SUCCESSFUL`

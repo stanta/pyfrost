@@ -24,6 +24,8 @@ import aiohttp
 from hashlib import sha256
 from enum import Enum
 from web3 import Web3
+from tronpy import Tron
+from tronpy.providers import HTTPProvider
 from .models import SigningRequestStatus
 from .routes.dkg import dkg_bp
 from .routes.signing import signing_bp
@@ -43,6 +45,7 @@ class Node:
         caller_validator: types.FunctionType,
         data_validator: types.FunctionType,
         eth_rpc_url: str = None,
+        tron_rpc_url: str = None,
     ) -> None:
         self.private = private
         self.node_id = str(node_id)
@@ -62,6 +65,10 @@ class Node:
                 raise ConnectionError(
                     f"Failed to connect to Ethereum RPC at {eth_rpc_url}"
                 )
+        self.tron = None
+        if tron_rpc_url:
+            provider = HTTPProvider(tron_rpc_url)
+            self.tron = Tron(provider=provider)
 
     def register_blueprints(self, app):
         app.register_blueprint(dkg_bp, url_prefix="/pyfrost")
@@ -88,7 +95,7 @@ class Node:
             return res_json
 
     async def _orchestrate_signature_creation(
-        self, dkg_public_key: str, message: str, party: List[str]
+        self, dkg_public_key: str, message: str, party: List[str], key_type: str = 'ETH'
     ) -> Dict:
         """Internal method to orchestrate signature generation."""
         request_id = sha256(message.encode()).hexdigest()
@@ -111,7 +118,7 @@ class Node:
             sign_payload = {
                 "dkg_public_key": dkg_public_key,
                 "nonces_dict": nonces_dict,
-                "data": {"hash": message},
+                "data": {"hash": message, "chain": key_type},
                 "request_id": request_id,
             }
             sign_tasks = [

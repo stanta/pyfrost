@@ -18,6 +18,7 @@ def run_node(node_number: int) -> None:
         nodes_info,
         NodeValidators.caller_validator,
         NodeValidators.data_validator,
+        tron_rpc_url="https://api.nileex.io"
     )
     node_info = nodes_info.lookup_node(str(node_number))
     app = Flask(__name__)

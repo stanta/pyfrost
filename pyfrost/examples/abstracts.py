@@ -43,7 +43,12 @@ class NodeValidators(Validators):
     @staticmethod
     def data_validator(input_data: Dict):
         result = {"data": input_data}
-        hash_obj = hashlib.sha3_256(json.dumps(result["data"]).encode())
+        chain = input_data.get("chain", "ETH")
+        if chain == "TRON":
+            hash_obj = hashlib.sha256(json.dumps(result["data"]).encode())
+        else:
+            hash_obj = hashlib.sha3_256(json.dumps(result["data"]).encode())
+
         hash_hex = hash_obj.hexdigest()
         result["hash"] = hash_hex
         return result
