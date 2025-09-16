@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify, abort, current_app
 from .decorators import request_handler
-from pyfrost.frost import KeyGen
+from ..dkg import SUPPORTED_PROTOCOLS
 import json
 from fastecdsa import ecdsa, curve
 from fastecdsa.encoding.sec1 import SEC1Encoder
@@ -18,14 +18,27 @@ def round1():
     dkg_id = data["dkg_id"]
     threshold = data["threshold"]
     key_type = data["key_type"]
+    protocol_type = data.get("protocol_type", "pyfrost")
+
+    if protocol_type not in SUPPORTED_PROTOCOLS:
+        abort(400, f"Protocol '{protocol_type}' not supported.")
+
     assert (
         node.node_id in party
     ), f"This node is not amoung specified party for app {dkg_id}"
     assert threshold <= len(party), f"Threshold must be <= n for Dkg {dkg_id}"
-    partners = [node_id for node_id in party if node.node_id != node_id]
-    node.key_gens[dkg_id] = KeyGen(
-        dkg_id, threshold, node.node_id, partners, key_type=key_type
+    
+    partners = [node_id for node_id in party if node.node_id != node.node_id]
+    
+    factory = SUPPORTED_PROTOCOLS[protocol_type]
+    dkg_instance = factory.create_dkg_instance(
+        dkg_id=dkg_id,
+        threshold=threshold,
+        node_id=node.node_id,
+        partners=partners,
+        key_type=key_type
     )
+    node.key_gens[dkg_id] = dkg_instance
     round1_broadcast_data = node.key_gens[dkg_id].round1()
 
     broadcast_bytes = json.dumps(round1_broadcast_data, sort_keys=True).encode(

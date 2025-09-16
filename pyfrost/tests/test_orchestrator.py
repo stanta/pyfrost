@@ -81,7 +81,7 @@ class TestOrchestratorAPI(unittest.TestCase):
                 return {'data': {'dkg_public_key': 'final_pk', 'public_share': 'ps'}, 'status': 'SUCCESSFUL'}
             return {}
         mock_make_request.side_effect = mock_dkg_flow
-        resp = self.client.post('/pyfrost/v1/wallets', json={'party': ['2', '3'], 'threshold': 2, 'key_type': 'schnorr'})
+        resp = self.client.post('/pyfrost/v1/wallets', json={'party': ['2', '3'], 'threshold': 2, 'key_type': 'schnorr', 'protocol_type': 'pyfrost'})
         self.assertEqual(resp.status_code, 200)
         data = resp.get_json()
         self.assertEqual(data['dkg_public_key'], 'final_pk')

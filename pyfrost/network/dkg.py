@@ -26,7 +26,16 @@ async def post_request(url: str, data: Dict, timeout: int = 10):
                 }
 
 
-class Dkg:
+from ..tss.pyfrost_frost import PyfrostFROSTFactory
+from ..tss.binance_tss import BinanceTssFactory
+
+SUPPORTED_PROTOCOLS = {
+    "pyfrost": PyfrostFROSTFactory,
+    "binance": BinanceTssFactory,
+}
+
+
+class DkgOrchestrator:
     def __init__(self, nodes_info: NodesInfo, default_timeout: int = 200) -> None:
         self.nodes_info: NodesInfo = nodes_info
         self.default_timeout = default_timeout
@@ -34,15 +43,19 @@ class Dkg:
     def __gather_round2_data(self, node_id: str, data: Dict) -> List:
         round2_data = []
         for _, round_data in data.items():
-            for entry in round_data["broadcast"]:
-                if entry["receiver_id"] == node_id:
+            # Assuming the structure is now {'broadcast': [...]}
+            for entry in round_data.get("broadcast", []):
+                if entry.get("receiver_id") == node_id:
                     round2_data.append(entry)
         return round2_data
 
     async def request_dkg(
-        self, threshold: int, party: List, key_type: str = "ETH"
+        self, threshold: int, party: List, key_type: str = "ETH", protocol_type: str = "pyfrost"
     ) -> Dict:
-        logging.info(f"Requesting DKG with threshold: {threshold} and party: {party}")
+        logging.info(f"Requesting DKG with protocol: {protocol_type}, threshold: {threshold}, party: {party}")
+        
+        if protocol_type not in SUPPORTED_PROTOCOLS:
+            return {"result": "FAILED", "error": f"Protocol '{protocol_type}' not supported."}
         dkg_id = str(uuid.uuid4())
 
         if len(party) < threshold:
@@ -58,6 +71,7 @@ class Dkg:
             "dkg_id": dkg_id,
             "threshold": threshold,
             "key_type": key_type,
+            "protocol_type": protocol_type,
         }
 
         # TODO: Check the sign verifications.
