@@ -20,9 +20,19 @@ def async_request_handler(func):
                 f"{request.remote_addr}{route_path} Got message: {request.get_json(silent=True)}"
             )
             result = await func(*args, **kwargs)
-            logging.debug(
-                f"{request.remote_addr}{route_path} Sent message: {json.dumps(result, indent=4)}"
-            )
+            try:
+                try:
+                    logging.debug(
+                        f"{request.remote_addr}{route_path} Sent message: {json.dumps(result, indent=4)}"
+                    )
+                except (TypeError, ValueError) as e:
+                    logging.debug(
+                        f"{request.remote_addr}{route_path} Sent message: (non-serializable) {repr(result)} - JSON error: {e}"
+                    )
+            except (TypeError, ValueError) as e:
+                logging.debug(
+                    f"{request.remote_addr}{route_path} Sent message: (non-serializable) {repr(result)} - JSON error: {e}"
+                )
             return jsonify(result), 200
         except HTTPException as e:
             # Re-raise HTTP exceptions (like aborts) so Flask can handle them

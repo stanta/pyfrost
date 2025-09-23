@@ -35,9 +35,10 @@ class TestTronAPI(unittest.TestCase):
             'public_nonce': '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798',
             'signature': 123
         }
-        
+
         instance = MagicMock()
         instance.is_connected.return_value = True
+        instance.trx.broadcast.return_value = {'txid': 'abc123'}
         self.node.tron = instance
 
         dkg_pk = '02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5'
